@@ -44,7 +44,7 @@ public class VideoPlayer extends Thread {
     public void addPacker(NALPacket nalPacket) {
         mListBuffer.add(nalPacket);
     }
-    
+
     @Override
     public void run() {
         super.run();
@@ -52,7 +52,7 @@ public class VideoPlayer extends Thread {
         while (!mIsEnd) {
             if (mListBuffer.size() == 0) {
                 try {
-                    sleep(50);
+                    sleep(1);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }

@@ -46,7 +46,7 @@ public class DNSNotify {
         txtRecord.set("rhd", "5.6.0.0");
         txtRecord.set("pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7");
         txtRecord.set("pi", "2e388006-13ba-4041-9a67-25dd4a43d536");
-//        this.mAirplayRegister = new Register(txtRecord, this.mDeviceName, "_airplay._tcp", "local.", "", port);
+        this.mAirplayRegister = new Register(txtRecord, this.mDeviceName, "_airplay._tcp", "local.", "", port);
         return txtRecord;
     }
 
@@ -72,7 +72,7 @@ public class DNSNotify {
         txtRecord.set("vs", "220.68");
         txtRecord.set("vn", "65537");
         txtRecord.set("pk", "b07727d6f6cd6e08b58ede525ec3cdeaa252ad9f683feb212ef8a205246554e7");
-//        this.mRaopRegister = new Register(txtRecord, mMacAddress.replace(":", "") + "@" + this.mDeviceName, "_raop._tcp", "local.", "", port);
+        this.mRaopRegister = new Register(txtRecord, mMacAddress.replace(":", "") + "@" + this.mDeviceName, "_raop._tcp", "local.", "", port);
         return txtRecord;
     }
 
@@ -104,7 +104,7 @@ public class DNSNotify {
 
         @Override
         public void serviceRegistered(DNSSDRegistration registration, int flags, String serviceName, String regType, String domain) {
-            Log.i("TAG", "Register successfully : " + serviceName);
+            Log.i("TAG", "107--------Register successfully : " + serviceName);
         }
 
         @Override
