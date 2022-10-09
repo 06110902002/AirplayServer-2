@@ -6,6 +6,8 @@ import java.util.List;
 
 public class NetUtils {
 
+    private static final String DEFAULT_MAC = "01:02:03:04:05:06";
+
     public static String getLocalMacAddress() {
         try {
             List<NetworkInterface> all = Collections.list(NetworkInterface.getNetworkInterfaces());
@@ -14,7 +16,7 @@ public class NetUtils {
 
                 byte[] macBytes = nif.getHardwareAddress();
                 if (macBytes == null) {
-                    return "";
+                    return DEFAULT_MAC;
                 }
 
                 StringBuilder res1 = new StringBuilder();
