@@ -2,39 +2,78 @@ package com.fang.myapplication.player;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
+import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.util.Log;
 import android.view.Surface;
 
 import com.fang.myapplication.model.NALPacket;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
-public class VideoPlayer extends Thread {
-
+public class VideoPlayer {
     private static final String TAG = "VideoPlayer";
-
-    private String mMimeType = "video/avc";
-    private int mVideoWidth  = 540;
-    private int mVideoHeight = 960;
-    private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
+    private static final String MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC;
+    private final int mVideoWidth = 540;
+    private final int mVideoHeight = 960;
     private MediaCodec mDecoder = null;
-    private Surface mSurface = null;
-    private boolean mIsEnd = false;
-    private List<NALPacket> mListBuffer = Collections.synchronizedList(new ArrayList<NALPacket>());
+    private final Surface mSurface;
+    private BlockingQueue<NALPacket> packets = new LinkedBlockingQueue<>(1);
+    private final HandlerThread mDecodeThread = new HandlerThread("VideoDecoder");
 
-    public VideoPlayer(Surface surface) {
+    private final MediaCodec.Callback mDecoderCallback = new MediaCodec.Callback() {
+        @Override
+        public void onInputBufferAvailable(MediaCodec codec, int index) {
+            try {
+                NALPacket packet = packets.take();
+                codec.getInputBuffer(index).put(packet.nalData);
+                mDecoder.queueInputBuffer(index, 0, packet.nalData.length, packet.pts, 0);
+            } catch (InterruptedException e) {
+                throw new IllegalStateException("Interrupted when is waiting");
+            } catch (IllegalStateException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void onOutputBufferAvailable(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
+            try {
+                codec.releaseOutputBuffer(index, true);
+            } catch (IllegalStateException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void onError(MediaCodec codec, MediaCodec.CodecException e) {
+            Log.e(TAG, "Decode error", e);
+        }
+
+        @Override
+        public void onOutputFormatChanged(MediaCodec codec, MediaFormat format) {
+
+        }
+    };
+
+    public VideoPlayer(Surface surface, int width, int heigth) {
+//        this.mVideoWidth=width;
+//        this.mVideoHeight=heigth;
         mSurface = surface;
     }
 
     public void initDecoder() {
+        mDecodeThread.start();
         try {
-            MediaFormat format = MediaFormat.createVideoFormat(mMimeType, mVideoWidth, mVideoHeight);
-            mDecoder = MediaCodec.createDecoderByType(mMimeType);
+            Log.i(TAG, "initDecoder: mVideoWidth=" + mVideoWidth + "---mVideoHeight=" + mVideoHeight);
+            mDecoder = MediaCodec.createDecoderByType(MIME_TYPE);
+            MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, mVideoWidth, mVideoHeight);
             mDecoder.configure(format, mSurface, null, 0);
             mDecoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                mDecoder.setCallback(mDecoderCallback, new Handler(mDecodeThread.getLooper()));
+            }
             mDecoder.start();
         } catch (Exception e) {
             e.printStackTrace();
@@ -42,70 +81,24 @@ public class VideoPlayer extends Thread {
     }
 
     public void addPacker(NALPacket nalPacket) {
-        mListBuffer.add(nalPacket);
+        try {
+            packets.put(nalPacket);
+        } catch (InterruptedException e) {
+            Log.e(TAG, "run: put error:", e);
+        }
     }
 
-    @Override
-    public void run() {
-        super.run();
+    public void start() {
         initDecoder();
-        while (!mIsEnd) {
-            if (mListBuffer.size() == 0) {
-                try {
-                    sleep(1);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                continue;
-            }
-            doDecode(mListBuffer.remove(0));
-        }
     }
 
-    private void doDecode(NALPacket nalPacket) {
-        final int TIMEOUT_USEC = 10000;
-        ByteBuffer[] decoderInputBuffers = mDecoder.getInputBuffers();
-        int inputBufIndex = -10000;
-        try {
-            inputBufIndex = mDecoder.dequeueInputBuffer(TIMEOUT_USEC);
-        } catch (Exception e) {
-            e.printStackTrace();
+    public void stopVideoPlay() {
+        if (mDecoder != null) {
+            mDecoder.stop();
+            mDecoder.release();
+            mDecoder = null;
         }
-        if (inputBufIndex >= 0) {
-            ByteBuffer inputBuf = decoderInputBuffers[inputBufIndex];
-            inputBuf.put(nalPacket.nalData);
-            mDecoder.queueInputBuffer(inputBufIndex, 0, nalPacket.nalData.length, nalPacket.pts, 0);
-        } else {
-            Log.d(TAG, "dequeueInputBuffer failed");
-        }
-
-        int outputBufferIndex = -10000;
-        try {
-            outputBufferIndex = mDecoder.dequeueOutputBuffer(mBufferInfo, TIMEOUT_USEC);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        if (outputBufferIndex >= 0) {
-            mDecoder.releaseOutputBuffer(outputBufferIndex, true);
-            try{
-                Thread.sleep(50);
-            }  catch (InterruptedException ie){
-                ie.printStackTrace();
-            }
-        } else if (outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-            try{
-                Thread.sleep(10);
-            }  catch (InterruptedException ie){
-                ie.printStackTrace();
-            }
-        } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-            // not important for us, since we're using Surface
-
-        } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-
-        } else {
-
-        }
-
+        mDecodeThread.quit();
+        packets.clear();
     }
 }
