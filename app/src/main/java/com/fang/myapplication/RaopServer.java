@@ -45,6 +45,10 @@ public class RaopServer implements SurfaceHolder.Callback {
         mAudioPlayer.addPacker(pcmPacket);
     }
 
+    public void onAVStop(int type) {
+        Log.v(TAG,"49------停止 " + type);
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
 

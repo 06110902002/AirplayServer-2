@@ -45,6 +45,17 @@ void OnRecvVideoData(void *observer, h264_decode_struct *data) {
     g_JavaVM->DetachCurrentThread();
 }
 
+void onAVStop(void *observer,int type) {
+    jobject obj = (jobject) observer;
+    JNIEnv* jniEnv = NULL;
+    g_JavaVM->AttachCurrentThread(&jniEnv, NULL);
+    jclass cls = jniEnv->GetObjectClass(obj);
+    jmethodID onAVStopMethodId = jniEnv->GetMethodID(cls, "onAVStop", "(I)V");
+    jniEnv->DeleteLocalRef(cls);
+    jniEnv->CallVoidMethod(obj, onAVStopMethodId,type);
+    g_JavaVM->DetachCurrentThread();
+}
+
 extern "C" void
 audio_process(void *cls, pcm_data_struct *data)
 {
@@ -128,6 +139,7 @@ Java_com_fang_myapplication_RaopServer_start(JNIEnv* env, jobject object) {
     raop_cbs.audio_process = audio_process;
     raop_cbs.audio_set_volume = audio_set_volume;
     raop_cbs.video_process = video_process;
+    raop_cbs.onAVStop = onAVStop;
     raop = raop_init(10, &raop_cbs);
     if (raop == NULL) {
         LOGE("raop = NULL");

@@ -214,6 +214,9 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
         uint64_t stream_type = 0;
         plist_get_uint_val(stream_type_plist, &stream_type);
         LOGV("type = %d",stream_type);
+		if (conn->raop) {
+			conn->raop->callbacks.onAVStop(conn->raop->callbacks.cls,stream_type);
+		}
 		if (stream_type == AUDIO_TYPE && conn->raop_rtp) {
 			/* Destroy our RTP session */
 			raop_rtp_destroy(conn->raop_rtp);
