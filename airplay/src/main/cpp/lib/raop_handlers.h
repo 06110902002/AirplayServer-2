@@ -13,6 +13,7 @@
  */
 
 #include "plist/plist/plist.h"
+#include "../log.h"
 #include <ctype.h>
 #include <stdlib.h>
 /* This file should be only included from raop.c as it defines static handler
@@ -242,6 +243,10 @@ raop_handler_options(raop_conn_t *conn,
 }
 
 static int setup = 0;
+static unsigned char aesiv[16];
+static unsigned char aeskey[16];
+static unsigned char ecdh_secret[32];
+static uint64_t timing_rport;
 
 static void
 raop_handler_setup(raop_conn_t *conn,
@@ -260,7 +265,6 @@ raop_handler_setup(raop_conn_t *conn,
     int datalen;
 
     data = http_request_get_data(request, &datalen);
-
     dacp_id = http_request_get_header(request, "DACP-ID");
     active_remote_header = http_request_get_header(request, "Active-Remote");
 
@@ -286,39 +290,73 @@ raop_handler_setup(raop_conn_t *conn,
     plist_t root_node = NULL;
     plist_from_bin(data, datalen, &root_node);
     plist_t streams_note = plist_dict_get_item(root_node, "streams");
-    if (setup == 0) { //video data
-		unsigned char aesiv[16];
-		unsigned char aeskey[16];
-        setup++;
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 1");
-        // First setup
-        plist_t eiv_note = plist_dict_get_item(root_node, "eiv");
-        char* eiv= NULL;
-        uint64_t eiv_len = 0;
-        plist_get_data_val(eiv_note, &eiv, &eiv_len);
-        memcpy(aesiv, eiv, 16);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "eiv_len = %llu", eiv_len);
-        plist_t ekey_note = plist_dict_get_item(root_node, "ekey");
-        char* ekey= NULL;
-        uint64_t ekey_len = 0;
-        plist_get_data_val(ekey_note, &ekey, &ekey_len);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "ekey_len = %llu", ekey_len);
-        // Time port
-		uint64_t timing_rport;
-        plist_t time_note = plist_dict_get_item(root_node, "timingPort");
-        plist_get_uint_val(time_note, &timing_rport);
-		logger_log(conn->raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
-        // ekey is 72 bytes
-        int ret = fairplay_decrypt(conn->fairplay, ekey, aeskey);
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "fairplay_decrypt ret = %d", ret);
-		unsigned char ecdh_secret[32];
-        pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
-        conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, aesiv, ecdh_secret, timing_rport);
-		conn->raop_rtp_mirror = raop_rtp_mirror_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, ecdh_secret, timing_rport);
-    } else if (setup == 1) {
+
+	//parse stream type
+	plist_t stream_index = plist_array_get_item(streams_note, 0);
+	plist_t stream_type_plist = plist_dict_get_item(stream_index, "type");
+	uint64_t stream_type = 0;
+	plist_get_uint_val(stream_type_plist, &stream_type);
+	LOGV("type = %ld",stream_type);
+
+    if (stream_type == AUDIO_TYPE) {
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP start parse audio task");
+		unsigned short cport = 0, tport = 0, dport = 0;
+		if (!conn->raop_rtp) {
+			conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, aesiv, ecdh_secret, timing_rport);
+		}
+		if (conn->raop_rtp) {//音频数据
+			raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
+			logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
+		} else {
+			logger_log(conn->raop->logger, LOGGER_ERR, "RAOP not initialized at SETUP, playing will fail!");
+			http_response_set_disconnect(response, 1);
+		}
+		// Need to return port
+		/**
+		 * <dict>
+				<key>streams</key>
+				<array>
+					<dict>
+						<key>dataPort</key>
+						<integer>42820</integer>
+						<key>controlPort</key>
+						<integer>46440</integer>
+						<key>type</key>
+						<integer>96</integer>
+					</dict>
+				</array>
+
+				<key>timingPort</key>
+				<integer>46440</integer>
+			</dict>
+			</plist>
+		 */
+		plist_t r_node = plist_new_dict();
+		plist_t s_node = plist_new_array();
+		plist_t s_sub_node = plist_new_dict();
+		plist_t data_port_node = plist_new_uint(dport);
+		plist_t type_node = plist_new_uint(96);
+		plist_t control_port_node = plist_new_uint(cport);
+		plist_t timing_port_node = plist_new_uint(tport);
+		plist_dict_set_item(s_sub_node, "dataPort", data_port_node);
+		plist_dict_set_item(s_sub_node, "type", type_node);
+		plist_dict_set_item(s_sub_node, "controlPort", control_port_node);
+		plist_array_append_item(s_node, s_sub_node);
+		plist_dict_set_item(r_node, "timingPort", timing_port_node);
+		plist_dict_set_item(r_node, "streams", s_node);
+		uint32_t len = 0;
+		char* rsp = NULL;
+		plist_to_bin(r_node, &rsp, &len);
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3 len = %d", len);
+		http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
+		*response_data = malloc(len);
+		memcpy(*response_data, rsp, len);
+		*response_datalen = len;
+		logger_log(conn->raop->logger, LOGGER_INFO, "dport = %d, tport = %d, cport = %d", dport, tport, cport);
+
+    } else if (stream_type == VIDEO_TYPE) {
 		unsigned short tport=0, dport=0;
-        setup++;
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 2");
+        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP start video parse task");
 		plist_t stream_note = plist_array_get_item(streams_note, 0);
 		plist_t type_note = plist_dict_get_item(stream_note, "type");
         uint64_t type;
@@ -361,59 +399,33 @@ raop_handler_setup(raop_conn_t *conn,
         *response_datalen = len;
         logger_log(conn->raop->logger, LOGGER_INFO, "dport = %d, tport = %d", dport, tport);
     } else {
-        logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3");
-        unsigned short cport = 0, tport = 0, dport = 0;
-
-        if (conn->raop_rtp) {//音频数据
-            raop_rtp_start_audio(conn->raop_rtp, use_udp, remote_cport, remote_tport, &cport, &tport, &dport);
-            logger_log(conn->raop->logger, LOGGER_DEBUG, "RAOP initialized success");
-        } else {
-            logger_log(conn->raop->logger, LOGGER_ERR, "RAOP not initialized at SETUP, playing will fail!");
-            http_response_set_disconnect(response, 1);
-        }
-        // Need to return port
-		/**
-		 * <dict>
-	<key>streams</key>
-	<array>
-		<dict>
-			<key>dataPort</key>
-			<integer>42820</integer>
-			<key>controlPort</key>
-			<integer>46440</integer>
-			<key>type</key>
-			<integer>96</integer>
-		</dict>
-	</array>
-
-	<key>timingPort</key>
-	<integer>46440</integer>
-</dict>
-</plist>
-		 */
-		plist_t r_node = plist_new_dict();
-		plist_t s_node = plist_new_array();
-		plist_t s_sub_node = plist_new_dict();
-		plist_t data_port_node = plist_new_uint(dport);
-		plist_t type_node = plist_new_uint(96);
-		plist_t control_port_node = plist_new_uint(cport);
-		plist_t timing_port_node = plist_new_uint(tport);
-		plist_dict_set_item(s_sub_node, "dataPort", data_port_node);
-		plist_dict_set_item(s_sub_node, "type", type_node);
-		plist_dict_set_item(s_sub_node, "controlPort", control_port_node);
-		plist_array_append_item(s_node, s_sub_node);
-		plist_dict_set_item(r_node, "timingPort", timing_port_node);
-		plist_dict_set_item(r_node, "streams", s_node);
-		uint32_t len = 0;
-		char* rsp = NULL;
-		plist_to_bin(r_node, &rsp, &len);
-		logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 3 len = %d", len);
-		http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
-		*response_data = malloc(len);
-		memcpy(*response_data, rsp, len);
-		*response_datalen = len;
-
-		logger_log(conn->raop->logger, LOGGER_INFO, "dport = %d, tport = %d, cport = %d", dport, tport, cport);
+		//unsigned char aesiv[16];
+		//unsigned char aeskey[16];
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "SETUP 初始化 解析音视频流工作线程");
+		// First setup
+		plist_t eiv_note = plist_dict_get_item(root_node, "eiv");
+		char* eiv= NULL;
+		uint64_t eiv_len = 0;
+		plist_get_data_val(eiv_note, &eiv, &eiv_len);
+		memcpy(aesiv, eiv, 16);
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "eiv_len = %llu", eiv_len);
+		plist_t ekey_note = plist_dict_get_item(root_node, "ekey");
+		char* ekey= NULL;
+		uint64_t ekey_len = 0;
+		plist_get_data_val(ekey_note, &ekey, &ekey_len);
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "ekey_len = %llu", ekey_len);
+		// Time port
+		//uint64_t timing_rport;
+		plist_t time_note = plist_dict_get_item(root_node, "timingPort");
+		plist_get_uint_val(time_note, &timing_rport);
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "timing_rport = %llu", timing_rport);
+		// ekey is 72 bytes
+		int ret = fairplay_decrypt(conn->fairplay, ekey, aeskey);
+		logger_log(conn->raop->logger, LOGGER_DEBUG, "fairplay_decrypt ret = %d", ret);
+		//unsigned char ecdh_secret[32];
+		pairing_get_ecdh_secret_key(conn->pairing, ecdh_secret);
+		conn->raop_rtp = raop_rtp_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, aesiv, ecdh_secret, timing_rport);
+		conn->raop_rtp_mirror = raop_rtp_mirror_init(conn->raop->logger, &conn->raop->callbacks, conn->remote, conn->remotelen, aeskey, ecdh_secret, timing_rport);
     }
 
 }

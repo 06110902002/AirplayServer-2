@@ -47,7 +47,7 @@ public class AudioPlayer extends Thread {
 
     private void doPlay(PCMPacket pcmPacket) {
         if (mTrack != null) {
-            mTrack.write(pcmPacket.data, 0, 960);
+            mTrack.write(pcmPacket.data, 0, pcmPacket.data.length);
         }
     }
 

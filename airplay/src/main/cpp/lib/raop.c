@@ -31,7 +31,8 @@
 #include "raop_rtp_mirror.h"
 #include "plist/bytearray.h"
 #include <android/log.h>
-
+#define AUDIO_TYPE 96
+#define VIDEO_TYPE 110
 struct raop_s {
 	/* Callbacks for audio */
 	raop_callbacks_t callbacks;
@@ -200,17 +201,29 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response)
 			logger_log(conn->raop->logger, LOGGER_WARNING, "RAOP not initialized at FLUSH");
 		}
 	} else if (!strcmp(method, "TEARDOWN")) {
-//		http_response_add_header(*response, "Connection", "close");
-//		if (conn->raop_rtp) {
-//			/* Destroy our RTP session */
-//			raop_rtp_destroy(conn->raop_rtp);
-//			conn->raop_rtp = NULL;
-//		}
-//        if (conn->raop_rtp_mirror) {
-//            /* Destroy our mirror session */
-//            raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
-//            conn->raop_rtp_mirror = NULL;
-//        }
+		//http_response_add_header(*response, "Connection", "close");
+        int datalen;
+        const char *data = http_request_get_data(request, &datalen);
+        plist_t root_node = NULL;
+        plist_from_bin(data, datalen, &root_node);
+        plist_t streams_note = plist_dict_get_item(root_node, "streams");
+
+        //parse stream type
+        plist_t stream_index = plist_array_get_item(streams_note, 0);
+        plist_t stream_type_plist = plist_dict_get_item(stream_index, "type");
+        uint64_t stream_type = 0;
+        plist_get_uint_val(stream_type_plist, &stream_type);
+        LOGV("type = %d",stream_type);
+		if (stream_type == AUDIO_TYPE && conn->raop_rtp) {
+			/* Destroy our RTP session */
+			raop_rtp_destroy(conn->raop_rtp);
+			conn->raop_rtp = NULL;
+		}
+        if (stream_type == VIDEO_TYPE && conn->raop_rtp_mirror) {
+            /* Destroy our mirror session */
+            raop_rtp_mirror_destroy(conn->raop_rtp_mirror);
+            conn->raop_rtp_mirror = NULL;
+        }
 	}
 	if (handler != NULL) {
 		handler(conn, request, *response, &response_data, &response_datalen);
